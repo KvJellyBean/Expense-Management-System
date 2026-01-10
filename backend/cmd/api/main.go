@@ -50,6 +50,7 @@ func main() {
 	authHandler := handler.NewAuthHandler(authUsecase)
 	expenseHandler := handler.NewExpenseHandler(expenseUsecase)
 	healthHandler := handler.NewHealthHandler()
+	docsHandler := handler.NewDocsHandler()
 
 	router := mux.NewRouter()
 
@@ -58,6 +59,10 @@ func main() {
 
 	router.Use(middleware.LoggingMiddleware)
 	router.Use(rateLimiter.Middleware)
+
+	// Documentation endpoints (no auth required)
+	router.HandleFunc("/docs", docsHandler.SwaggerUI).Methods("GET")
+	router.HandleFunc("/docs/openapi.yaml", docsHandler.ServeOpenAPISpec).Methods("GET")
 
 	router.HandleFunc("/api/health", healthHandler.Health).Methods("GET")
 	router.HandleFunc("/api/auth/login", authHandler.Login).Methods("POST")
