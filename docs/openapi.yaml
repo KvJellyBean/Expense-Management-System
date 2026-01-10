@@ -1,0 +1,629 @@
+openapi: 3.0.3
+info:
+  title: Expense Management System API
+  description: |
+    Indonesian fintech platform expense management system API.
+    
+    This API allows employees to submit expenses in Rupiah (IDR), 
+    managers to approve them, and automatically processes payments 
+    for approved expenses.
+    
+    **Key Features:**
+    - Auto-approval for expenses < IDR 1,000,000
+    - Manager approval required for expenses ≥ IDR 1,000,000
+    - Background payment processing
+    - Audit trail for all changes
+    - Rate limiting protection
+    
+    **Authentication:**
+    All endpoints (except /health and /auth/login) require JWT Bearer token.
+    
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: kevinnatan91@gmail.com
+
+servers:
+  - url: http://localhost:8080/api
+    description: Local development server
+  - url: https://api.example.com/api
+    description: Production server
+
+tags:
+  - name: Authentication
+    description: User authentication endpoints
+  - name: Expenses
+    description: Expense management operations
+  - name: Approvals
+    description: Manager approval workflow (managers only)
+  - name: Health
+    description: System health monitoring
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check endpoint
+      description: Check if the API service is running and healthy
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2025-01-09T12:00:00Z"
+
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: Authenticate user and receive JWT token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: employee1@example.com
+                password:
+                  type: string
+                  format: password
+                  example: password123
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT authentication token
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid request (missing fields)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /expenses:
+    post:
+      tags:
+        - Expenses
+      summary: Submit new expense
+      description: |
+        Submit a new expense for approval or auto-approval.
+        
+        **Business Rules:**
+        - Amount must be between IDR 10,000 and IDR 50,000,000
+        - Expenses < IDR 1,000,000 are auto-approved
+        - Expenses ≥ IDR 1,000,000 require manager approval
+        - Description is required
+        - Receipt URL is optional
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitExpenseRequest'
+            examples:
+              autoApproved:
+                summary: Auto-approved expense (< IDR 1,000,000)
+                value:
+                  amount_idr: 750000
+                  description: Office supplies from Tokopedia
+                  receipt_url: https://placehold.co/400x600/png
+              requiresApproval:
+                summary: Requires approval (≥ IDR 1,000,000)
+                value:
+                  amount_idr: 1500000
+                  description: Client meeting lunch at Plaza Indonesia
+                  receipt_url: /mock-receipt.pdf
+      responses:
+        '201':
+          description: Expense submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitExpenseResponse'
+              examples:
+                autoApproved:
+                  summary: Auto-approved expense
+                  value:
+                    id: 5
+                    amount_idr: 750000
+                    description: Office supplies from Tokopedia
+                    status: approved
+                    requires_approval: false
+                    auto_approved: true
+                    created_at: "2025-01-09T10:30:00Z"
+                    receipt_url: https://placehold.co/400x600/png
+                requiresApproval:
+                  summary: Pending manager approval
+                  value:
+                    id: 6
+                    amount_idr: 1500000
+                    description: Client meeting lunch at Plaza Indonesia
+                    status: pending
+                    requires_approval: true
+                    auto_approved: false
+                    created_at: "2025-01-09T10:35:00Z"
+                    receipt_url: /mock-receipt.pdf
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                amountTooLow:
+                  summary: Amount below minimum
+                  value:
+                    error: "amount must be between IDR 10000 and IDR 50000000"
+                amountTooHigh:
+                  summary: Amount above maximum
+                  value:
+                    error: "amount must be between IDR 10000 and IDR 50000000"
+                missingDescription:
+                  summary: Description is required
+                  value:
+                    error: "description is required"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    
+    get:
+      tags:
+        - Expenses
+      summary: List expenses
+      description: |
+        Get list of expenses with filtering and pagination.
+        
+        **Access Control:**
+        - Employees can only see their own expenses
+        - Managers can see all expenses
+      parameters:
+        - name: status
+          in: query
+          description: Filter by expense status
+          schema:
+            type: string
+            enum: [pending, approved, rejected, completed, all]
+            default: all
+          example: pending
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 1
+        - name: limit
+          in: query
+          description: Number of items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          example: 10
+      responses:
+        '200':
+          description: List of expenses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  expenses:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Expense'
+                  total:
+                    type: integer
+                    description: Total number of expenses matching filter
+                    example: 25
+                  page:
+                    type: integer
+                    example: 1
+                  limit:
+                    type: integer
+                    example: 10
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /expenses/{id}:
+    get:
+      tags:
+        - Expenses
+      summary: Get expense details
+      description: Retrieve detailed information about a specific expense
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Expense ID
+          schema:
+            type: integer
+          example: 6
+      responses:
+        '200':
+          description: Expense details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseDetail'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Forbidden - Cannot access other user's expense
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Expense not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /expenses/{id}/approve:
+    put:
+      tags:
+        - Approvals
+      summary: Approve expense (managers only)
+      description: |
+        Approve a pending expense. This action:
+        - Updates expense status to 'approved'
+        - Creates approval record with notes
+        - Triggers background payment processing
+        - Creates audit log entry
+        
+        **Authorization:** Only managers can approve expenses
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Expense ID to approve
+          schema:
+            type: integer
+          example: 6
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  description: Approval notes/comments
+                  example: Approved for Q1 client engagement budget
+      responses:
+        '200':
+          description: Expense approved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Expense approved successfully
+                  expense:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 6
+                      status:
+                        type: string
+                        example: approved
+                      updated_at:
+                        type: string
+                        format: date-time
+                        example: "2025-01-09T11:00:00Z"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Forbidden - Only managers can approve
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Expense not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /expenses/{id}/reject:
+    put:
+      tags:
+        - Approvals
+      summary: Reject expense (managers only)
+      description: |
+        Reject a pending expense with notes explaining the reason.
+        
+        **Authorization:** Only managers can reject expenses
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Expense ID to reject
+          schema:
+            type: integer
+          example: 6
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  description: Rejection reason/notes
+                  example: Receipt not clear, please resubmit with itemized bill
+      responses:
+        '200':
+          description: Expense rejected successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Expense rejected successfully
+                  expense:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 6
+                      status:
+                        type: string
+                        example: rejected
+                      updated_at:
+                        type: string
+                        format: date-time
+                        example: "2025-01-09T11:05:00Z"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Forbidden - Only managers can reject
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Expense not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from /auth/login endpoint
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+          example: employee1@example.com
+        name:
+          type: string
+          example: Employee One
+        role:
+          type: string
+          enum: [employee, manager]
+          example: employee
+        created_at:
+          type: string
+          format: date-time
+          example: "2025-01-01T00:00:00Z"
+
+    SubmitExpenseRequest:
+      type: object
+      required:
+        - amount_idr
+        - description
+      properties:
+        amount_idr:
+          type: integer
+          description: |
+            Expense amount in Indonesian Rupiah (IDR).
+            Must be between 10,000 and 50,000,000.
+            Stored as integer to avoid floating-point errors.
+          minimum: 10000
+          maximum: 50000000
+          example: 1500000
+        description:
+          type: string
+          description: Expense description (required)
+          minLength: 1
+          example: Client meeting lunch at Plaza Indonesia
+        receipt_url:
+          type: string
+          description: URL to receipt image/PDF (optional)
+          example: https://placehold.co/400x600/png
+
+    SubmitExpenseResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 6
+        amount_idr:
+          type: integer
+          description: Amount in Indonesian Rupiah
+          example: 1500000
+        description:
+          type: string
+          example: Client meeting lunch at Plaza Indonesia
+        status:
+          type: string
+          enum: [pending, approved, rejected, completed]
+          example: pending
+        requires_approval:
+          type: boolean
+          description: True if amount ≥ IDR 1,000,000
+          example: true
+        auto_approved:
+          type: boolean
+          description: True if automatically approved (< IDR 1,000,000)
+          example: false
+        created_at:
+          type: string
+          format: date-time
+          example: "2025-01-09T10:35:00Z"
+        receipt_url:
+          type: string
+          example: /mock-receipt.pdf
+
+    Expense:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 6
+        user_id:
+          type: integer
+          example: 1
+        amount_idr:
+          type: integer
+          description: Amount in Indonesian Rupiah
+          example: 1500000
+        description:
+          type: string
+          example: Client meeting lunch at Plaza Indonesia
+        receipt_url:
+          type: string
+          nullable: true
+          example: /mock-receipt.pdf
+        status:
+          type: string
+          enum: [pending, approved, rejected, completed]
+          example: pending
+        auto_approved:
+          type: boolean
+          example: false
+        payment_id:
+          type: string
+          nullable: true
+          description: Payment processor transaction ID
+          example: e93c119d-85da-43a0-b73a-8cfeaaad9c16
+        payment_external_id:
+          type: string
+          nullable: true
+          description: Idempotency key for payment
+          example: 88e26222-de26-4b53-ad25-8f3dacb79157
+        submitted_at:
+          type: string
+          format: date-time
+          example: "2025-01-09T10:35:00Z"
+        processed_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2025-01-09T11:10:00Z"
+
+    ExpenseDetail:
+      allOf:
+        - $ref: '#/components/schemas/Expense'
+        - type: object
+          properties:
+            user_name:
+              type: string
+              description: Name of user who submitted the expense
+              example: Employee One
+            approvals:
+              type: array
+              description: List of approval records (if any)
+              items:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    example: 1
+                  approver_id:
+                    type: integer
+                    example: 3
+                  approver_name:
+                    type: string
+                    example: Manager Name
+                  status:
+                    type: string
+                    enum: [approved, rejected]
+                    example: approved
+                  notes:
+                    type: string
+                    example: Approved for Q1 budget
+                  created_at:
+                    type: string
+                    format: date-time
+                    example: "2025-01-09T11:00:00Z"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: Invalid credentials
+
+  responses:
+    UnauthorizedError:
+      description: Authentication token is missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Unauthorized

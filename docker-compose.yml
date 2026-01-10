@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: expense-postgres
+    environment:
+      POSTGRES_USER: expense_user
+      POSTGRES_PASSWORD: expense_pass
+      POSTGRES_DB: expense_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - expense-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U expense_user -d expense_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: postgres:15-alpine
+    container_name: expense-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/migrations:/migrations
+    networks:
+      - expense-network
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: expense_user
+      DB_PASSWORD: expense_pass
+      DB_NAME: expense_db
+    command:
+      - sh
+      - -c
+      - |
+        export PGPASSWORD=expense_pass
+        echo 'Waiting for database...'
+        until pg_isready -h postgres -U expense_user -d expense_db; do sleep 1; done
+        echo 'Running migrations...'
+        for migration in /migrations/*.up.sql; do
+          if [ -f "$$migration" ]; then
+            echo "Applying $$(basename $$migration)..."
+            psql -h postgres -U expense_user -d expense_db -f "$$migration"
+          fi
+        done
+        echo 'Migrations completed!'
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: expense-backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docs:/app/docs:ro
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: expense_user
+      DB_PASSWORD: expense_pass
+      DB_NAME: expense_db
+      DB_SSLMODE: disable
+      JWT_SECRET: your-secret-key-change-in-production
+      JWT_EXPIRY_HOURS: 24
+      SERVER_PORT: 8080
+      PAYMENT_API_URL: https://1620e98f-7759-431c-a2aa-f449d591150b.mock.pstmn.io
+      WORKER_POOL_SIZE: 5
+      WORKER_MAX_RETRIES: 3
+    networks:
+      - expense-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: expense-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    environment:
+      API_BASE_URL: http://backend:8080/api
+      NITRO_HOST: 0.0.0.0
+      NITRO_PORT: 3000
+    networks:
+      - expense-network
+    restart: unless-stopped
+
+networks:
+  expense-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

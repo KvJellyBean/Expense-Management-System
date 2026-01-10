@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS approvals;
+DROP TABLE IF EXISTS expenses;
+DROP TABLE IF EXISTS users;
